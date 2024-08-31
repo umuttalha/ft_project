@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:pocketbase/pocketbase.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
-final pb = PocketBase('http://172.81.178.244:8090');
+final pb = PocketBase(dotenv.env['BACKEND_URL'] ?? 'http://localhost:8090');
 
 class UserProvider with ChangeNotifier {
   String? _email;
@@ -39,7 +40,8 @@ class UserProvider with ChangeNotifier {
   }
 }
 
-void main() {
+Future<void> main() async {
+  await dotenv.load(fileName: ".env");
   runApp(
     ChangeNotifierProvider(
       create: (context) => UserProvider(),
@@ -56,7 +58,7 @@ class MyApp extends StatelessWidget {
       home: Consumer<UserProvider>(
         builder: (context, userProvider, child) {
           if (userProvider.isLoggedIn || userProvider.skippedSignIn) {
-            return ExamSelectionPage();
+            return const ExamSelectionPage();
           } else {
             return SignInPage();
           }
@@ -82,7 +84,7 @@ class _SignInPageState extends State<SignInPage> {
   void _skipSignIn() {
     Provider.of<UserProvider>(context, listen: false).setSkippedSignIn(true);
     Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (context) => ExamSelectionPage()),
+      MaterialPageRoute(builder: (context) => const ExamSelectionPage()),
     );
   }
 
@@ -103,7 +105,7 @@ class _SignInPageState extends State<SignInPage> {
             .setUser(_email, authData.token);
 
         Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (context) => ExamSelectionPage()),
+          MaterialPageRoute(builder: (context) => const ExamSelectionPage()),
         );
       } catch (e) {
         print(e.toString());
@@ -167,7 +169,7 @@ class _SignInPageState extends State<SignInPage> {
               ElevatedButton(
                 onPressed: _isLoading ? null : _signIn,
                 child: _isLoading
-                    ? CircularProgressIndicator()
+                    ? const CircularProgressIndicator()
                     : const Text('Sign In'),
               ),
               TextButton(
@@ -197,8 +199,6 @@ class SignUpPage extends StatefulWidget {
 class _SignUpPageState extends State<SignUpPage> {
   final _formKey = GlobalKey<FormState>();
   String _email = '';
-  String _password = '';
-  String _confirmPassword = '';
   bool _isLoading = false;
 
   TextEditingController _passwordController = TextEditingController();
@@ -212,7 +212,7 @@ class _SignUpPageState extends State<SignUpPage> {
       });
 
       try {
-        final user = await pb.collection('users').create(body: {
+        await pb.collection('users').create(body: {
           'email': _email,
           'password': _passwordController.text,
           'passwordConfirm': _confirmPasswordController.text,
@@ -299,7 +299,7 @@ class _SignUpPageState extends State<SignUpPage> {
               ElevatedButton(
                 onPressed: _isLoading ? null : _signUp,
                 child: _isLoading
-                    ? CircularProgressIndicator()
+                    ? const CircularProgressIndicator()
                     : const Text('Sign Up'),
               ),
               TextButton(
@@ -316,8 +316,41 @@ class _SignUpPageState extends State<SignUpPage> {
   }
 }
 
-class ExamSelectionPage extends StatelessWidget {
+class ExamSelectionPage extends StatefulWidget {
   const ExamSelectionPage({Key? key}) : super(key: key);
+
+  @override
+  _ExamSelectionPageState createState() => _ExamSelectionPageState();
+}
+
+class _ExamSelectionPageState extends State<ExamSelectionPage> {
+  List<RecordModel> examTypes = [];
+  bool isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    fetchExamTypes();
+  }
+
+  Future<void> fetchExamTypes() async {
+    try {
+      final records = await pb.collection('exam_type').getFullList(
+            sort: '-created',
+            expand: "Lectures",
+          );
+
+      setState(() {
+        examTypes = records;
+        isLoading = false;
+      });
+    } catch (e) {
+      print('Error fetching exam types: $e');
+      setState(() {
+        isLoading = false;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -327,34 +360,26 @@ class ExamSelectionPage extends StatelessWidget {
           title: const Text('Sınav Seçin'),
         ),
         body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              ExamButton(
-                examName: 'YKS',
-                onTap: () => _navigateToFirstRoute(context, 'YKS'),
-              ),
-              ExamButton(
-                examName: 'TEOG',
-                onTap: () => _navigateToFirstRoute(context, 'TEOG'),
-              ),
-              ExamButton(
-                examName: 'KPSS',
-                onTap: () => _navigateToFirstRoute(context, 'KPSS'),
-              ),
-              ExamButton(
-                examName: 'ALES',
-                onTap: () => _navigateToFirstRoute(context, 'ALES'),
-              ),
-            ],
-          ),
+          child: isLoading
+              ? const CircularProgressIndicator()
+              : ListView.builder(
+                  itemCount: examTypes.length,
+                  itemBuilder: (context, index) {
+                    final examType = examTypes[index];
+                    return ExamButton(
+                      examName: examType.data['name'] ?? 'Unknown',
+                      onTap: () => _navigateToFirstRoute(
+                          context, examType.data['name'] ?? 'Unknown'),
+                    );
+                  },
+                ),
         ),
       ),
     );
   }
 
   void _navigateToFirstRoute(BuildContext context, String examName) {
-    print("Ders Seç page for $examName"); //
+    print("Ders Seç page for $examName");
     Navigator.push(
       context,
       MaterialPageRoute(builder: (context) => FirstRoute(examName: examName)),
@@ -469,10 +494,46 @@ class _BottomNavWrapperState extends State<BottomNavWrapper> {
   }
 }
 
-class FirstRoute extends StatelessWidget {
+class FirstRoute extends StatefulWidget {
   final String examName;
 
   const FirstRoute({Key? key, required this.examName}) : super(key: key);
+
+  @override
+  _FirstRouteState createState() => _FirstRouteState();
+}
+
+class _FirstRouteState extends State<FirstRoute> {
+  List<RecordModel> lectures = [];
+  bool isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    fetchLectures();
+  }
+
+  Future<void> fetchLectures() async {
+    try {
+      final records = await pb.collection('exam_type_lecture').getFullList(
+            sort: '-created',
+            filter: 'exam.name="${widget.examName}"',
+          );
+
+      print(records);
+      print(widget.examName);
+
+      setState(() {
+        lectures = records;
+        isLoading = false;
+      });
+    } catch (e) {
+      print('Error fetching lectures: $e');
+      setState(() {
+        isLoading = false;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -481,62 +542,96 @@ class FirstRoute extends StatelessWidget {
         appBar: AppBar(
           title: const Text('Ders Seç'),
         ),
-        body: Center(
-          child: CardExample(examName: examName),
-        ),
+        body: isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : ListView.builder(
+                itemCount: lectures.length,
+                itemBuilder: (context, index) {
+                  final lecture = lectures[index];
+                  return TestCard(
+                    title: lecture.data['name'] ?? 'Unknown',
+                    icon: Icons.book, // You might want to customize this
+                    onTap: () => _navigateToTestPage(
+                        context, lecture.data['name'] ?? 'Unknown'),
+                  );
+                },
+              ),
+      ),
+    );
+  }
+
+  void _navigateToTestPage(BuildContext context, String testName) {
+    print("Test page for $testName - ${widget.examName} sınavı");
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) =>
+            TestPage(testName: testName, examName: widget.examName),
       ),
     );
   }
 }
 
 class Question {
+  final String id;
   final String questionText;
   final List<String> options;
   final int correctAnswerIndex;
   final String explanation;
 
   Question({
+    required this.id,
     required this.questionText,
     required this.options,
     required this.correctAnswerIndex,
     required this.explanation,
   });
-}
 
-class CardExample extends StatelessWidget {
-  final String examName;
-  static const List<Map<String, dynamic>> cardData = [
-    {'title': 'İngilizce', 'icon': Icons.language},
-    {'title': 'Türkçe', 'icon': Icons.book},
-    {'title': 'Matematik', 'icon': Icons.calculate},
-  ];
-
-  const CardExample({super.key, required this.examName});
-
-  @override
-  Widget build(BuildContext context) {
-    return ListView.builder(
-      itemCount: cardData.length,
-      itemBuilder: (context, index) {
-        return TestCard(
-          title: cardData[index]['title'],
-          icon: cardData[index]['icon'],
-          onTap: () => _navigateToTestPage(context, cardData[index]['title']),
-        );
-      },
-    );
-  }
-
-  void _navigateToTestPage(BuildContext context, String testName) {
-    print("Test page for $testName - $examName sınavı");
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-          builder: (context) =>
-              TestPage(testName: testName, examName: examName)),
+  factory Question.fromJson(Map<String, dynamic> json) {
+    return Question(
+      id: json['id'],
+      questionText: json['question_text'],
+      options: List<String>.from(json['options']),
+      correctAnswerIndex: json['correct_answer_index'],
+      explanation: json['explanation'],
     );
   }
 }
+
+// class CardExample extends StatelessWidget {
+//   final String examName;
+//   static const List<Map<String, dynamic>> cardData = [
+//     {'title': 'İngilizce', 'icon': Icons.language},
+//     {'title': 'Türkçe', 'icon': Icons.book},
+//     {'title': 'Matematik', 'icon': Icons.calculate},
+//   ];
+
+//   const CardExample({super.key, required this.examName});
+
+//   @override
+//   Widget build(BuildContext context) {
+//     return ListView.builder(
+//       itemCount: cardData.length,
+//       itemBuilder: (context, index) {
+//         return TestCard(
+//           title: cardData[index]['title'],
+//           icon: cardData[index]['icon'],
+//           onTap: () => _navigateToTestPage(context, cardData[index]['title']),
+//         );
+//       },
+//     );
+//   }
+
+//   void _navigateToTestPage(BuildContext context, String testName) {
+//     print("Test page for $testName - $examName sınavı");
+//     Navigator.push(
+//       context,
+//       MaterialPageRoute(
+//           builder: (context) =>
+//               TestPage(testName: testName, examName: examName)),
+//     );
+//   }
+// }
 
 class TestCard extends StatelessWidget {
   final String title;
@@ -575,57 +670,76 @@ class TestCard extends StatelessWidget {
   }
 }
 
-class TestPage extends StatelessWidget {
+class TestPage extends StatefulWidget {
   final String testName;
   final String examName;
 
   const TestPage({super.key, required this.testName, required this.examName});
 
   @override
+  _TestPageState createState() => _TestPageState();
+}
+
+class _TestPageState extends State<TestPage> {
+  List<RecordModel> topics = [];
+  bool isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    fetchTopics();
+  }
+
+  Future<void> fetchTopics() async {
+    try {
+      final records =
+          await pb.collection('exam_type_lecture_topic').getFullList(
+                sort: '-created',
+                expand: "lecture",
+                filter: 'lecture.name="${widget.testName}"',
+              );
+
+      setState(() {
+        topics = records;
+        isLoading = false;
+      });
+    } catch (e) {
+      print('Error fetching topics: $e');
+      setState(() {
+        isLoading = false;
+      });
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     return BottomNavWrapper(
       child: Scaffold(
         appBar: AppBar(
-          title: Text(testName),
+          title: Text(widget.testName),
         ),
-        body: ListView(
-          children: [
-            TestCard(
-              title: 'Random $testName Quiz',
-              icon: Icons.shuffle,
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => QuizPage(
-                      testName: testName,
-                      quizNumber: 0, // 0 can indicate a random quiz
-                      examName: examName,
-                    ),
-                  ),
-                );
-              },
-            ),
-            ...List.generate(
-              3,
-              (index) => TestCard(
-                title: '$testName ${index + 1} Konu',
-                icon: Icons.quiz,
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => QuizPage(
-                          testName: testName,
-                          quizNumber: index + 1,
-                          examName: examName),
-                    ),
-                  );
-                },
+        body: isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : ListView(
+                children: [
+                  ...topics.map((topic) => TestCard(
+                        title: topic.data['topic'] ?? 'Unknown Topic',
+                        icon: Icons.quiz,
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => QuizPage(
+                                testName: widget.testName,
+                                examName: widget.examName,
+                                topicId: topic.id,
+                              ),
+                            ),
+                          );
+                        },
+                      )),
+                ],
               ),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -633,14 +747,14 @@ class TestPage extends StatelessWidget {
 
 class QuizPage extends StatefulWidget {
   final String testName;
-  final int quizNumber;
   final String examName;
+  final String topicId;
 
   const QuizPage({
     Key? key,
     required this.testName,
-    required this.quizNumber,
     required this.examName,
+    required this.topicId,
   }) : super(key: key);
 
   @override
@@ -649,9 +763,9 @@ class QuizPage extends StatefulWidget {
 
 class _QuizPageState extends State<QuizPage> {
   late PageController _pageController;
-
-  int currentQuestionIndex = 0;
   List<Question> questions = [];
+  bool isLoading = true;
+  int currentQuestionIndex = 0;
   bool showExplanationButton = false;
   Set<int> selectedIndices = {};
   bool answeredCorrectly = false;
@@ -660,42 +774,68 @@ class _QuizPageState extends State<QuizPage> {
   void initState() {
     super.initState();
     _pageController = PageController();
-    print(
-        "Test Name: ${widget.testName}, Quiz Number: ${widget.quizNumber}, Exam Name: ${widget.examName}");
-    questions = [
-      Question(
-        questionText: "What is the capital of France?",
-        options: ["London", "Berlin", "Paris", "Madrid"],
-        correctAnswerIndex: 2,
-        explanation:
-            "Paris is the capital and largest city of France. It is located on the Seine River in northern France and is known for its iconic landmarks like the Eiffel Tower and the Louvre Museum.",
-      ),
-      Question(
-        questionText: "Which planet is known as the Red Planet?",
-        options: ["Venus", "Mars", "Jupiter", "Saturn"],
-        correctAnswerIndex: 1,
-        explanation:
-            "Mars is often called the Red Planet due to its reddish appearance in the night sky. This color is caused by the presence of iron oxide (rust) on its surface.",
-      ),
-      Question(
-        questionText: "What is the largest ocean on Earth?",
-        options: [
-          "Atlantic Ocean",
-          "Indian Ocean",
-          "Arctic Ocean",
-          "Pacific Ocean"
-        ],
-        correctAnswerIndex: 3,
-        explanation:
-            "The Pacific Ocean is the largest and deepest ocean on Earth, covering an area of about 63 million square miles (165 million square kilometers).",
-      ),
-    ];
+    fetchQuestions();
+  }
+
+  Future<void> fetchQuestions() async {
+    try {
+      final records = await pb.collection('questions').getFullList(
+            sort: '-created',
+            filter: 'topic.id = "${widget.topicId}"',
+          );
+
+      setState(() {
+        questions = records
+            .map((record) => Question(
+                  id: record.id,
+                  questionText: record.data['question'],
+                  options: [
+                    record.data['answer1'],
+                    record.data['answer2'],
+                    record.data['answer3'],
+                    record.data['answer4'],
+                    record.data['answer5'],
+                  ],
+                  correctAnswerIndex: int.parse(record.data['correct_answer']),
+                  explanation: record.data['hint'],
+                ))
+            .toList();
+        isLoading = false;
+      });
+    } catch (e) {
+      print('Error fetching questions: $e');
+      setState(() {
+        isLoading = false;
+      });
+    }
   }
 
   @override
   void dispose() {
     _pageController.dispose();
     super.dispose();
+  }
+
+  void quizCompleted() {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text("Quiz Completed"),
+          content: const Text(
+              "Congratulations! You have finished all the questions."),
+          actions: [
+            TextButton(
+              child: const Text("OK"),
+              onPressed: () {
+                Navigator.of(context).pop(); // Close the dialog
+                Navigator.of(context).pop(); // Return to the previous page
+              },
+            ),
+          ],
+        );
+      },
+    );
   }
 
   void checkAnswer(int index) {
@@ -722,8 +862,7 @@ class _QuizPageState extends State<QuizPage> {
         showExplanationButton = false;
         answeredCorrectly = false;
       } else {
-        // Quiz finished
-        // You can navigate to a results page or show a dialog here
+        quizCompleted();
       }
     });
   }
@@ -733,11 +872,11 @@ class _QuizPageState extends State<QuizPage> {
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
-          title: Text("Explanation"),
+          title: const Text("Explanation"),
           content: Text(questions[currentQuestionIndex].explanation),
           actions: [
             TextButton(
-              child: Text("Close"),
+              child: const Text("Close"),
               onPressed: () {
                 Navigator.of(context).pop();
               },
@@ -753,81 +892,85 @@ class _QuizPageState extends State<QuizPage> {
     return BottomNavWrapper(
       child: Scaffold(
         appBar: AppBar(
-          title: Text('${widget.testName} Quiz ${widget.quizNumber}'),
+          title: Text('${widget.testName} Quiz'),
         ),
-        body: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                questions[currentQuestionIndex].questionText,
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              SizedBox(height: 20),
-              ...questions[currentQuestionIndex]
-                  .options
-                  .asMap()
-                  .entries
-                  .map((entry) {
-                int idx = entry.key;
-                String option = entry.value;
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8.0),
-                  child: ElevatedButton(
-                    onPressed: () => checkAnswer(idx),
-                    child: Text(option),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: selectedIndices.contains(idx)
-                          ? (idx ==
-                                  questions[currentQuestionIndex]
-                                      .correctAnswerIndex
-                              ? Colors.greenAccent
-                              : Colors.redAccent)
-                          : null,
+        body: isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : questions.isEmpty
+                ? const Center(child: Text('No questions available'))
+                : Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          questions[currentQuestionIndex].questionText,
+                          style: const TextStyle(
+                              fontSize: 18, fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 20),
+                        ...questions[currentQuestionIndex]
+                            .options
+                            .asMap()
+                            .entries
+                            .map((entry) {
+                          int idx = entry.key;
+                          String option = entry.value;
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 8.0),
+                            child: ElevatedButton(
+                              onPressed: () => checkAnswer(idx),
+                              child: Text(option),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: selectedIndices.contains(idx)
+                                    ? (idx ==
+                                            questions[currentQuestionIndex]
+                                                .correctAnswerIndex
+                                        ? Colors.greenAccent
+                                        : Colors.redAccent)
+                                    : null,
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                        if (showExplanationButton)
+                          ElevatedButton.icon(
+                            onPressed: showExplanationModal,
+                            icon: const Icon(Icons.lightbulb_outline),
+                            label: const Text("İpucu"),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.amber,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 16.0, vertical: 12.0),
+                            ),
+                          ),
+                        if (answeredCorrectly)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 12.0),
+                            child: ElevatedButton.icon(
+                              onPressed: nextQuestion,
+                              icon: const Icon(Icons.arrow_forward),
+                              label: const Text(
+                                "Next Question",
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor:
+                                    const Color.fromARGB(255, 245, 190, 254),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 20.0, vertical: 15.0),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10.0),
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                   ),
-                );
-              }).toList(),
-              if (showExplanationButton)
-                ElevatedButton.icon(
-                  onPressed: showExplanationModal,
-                  icon: Icon(Icons.lightbulb_outline),
-                  label: Text("İpucu"),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.amber,
-                    padding:
-                        EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
-                  ),
-                ),
-              if (answeredCorrectly)
-                Padding(
-                  padding: const EdgeInsets.only(top: 12.0),
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      nextQuestion();
-                    },
-                    icon: Icon(Icons.arrow_forward),
-                    label: Text(
-                      "Next Question",
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color.fromARGB(255, 245, 190, 254),
-                      padding: EdgeInsets.symmetric(
-                          horizontal: 20.0, vertical: 15.0),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10.0),
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
       ),
     );
   }
