@@ -1,10 +1,319 @@
 import 'package:flutter/material.dart';
+import 'package:pocketbase/pocketbase.dart';
+import 'package:provider/provider.dart';
+
+final pb = PocketBase('http://172.81.178.244:8090');
+
+class UserProvider with ChangeNotifier {
+  String? _email;
+  String? _token;
+  bool _skippedSignIn = false;
+
+  String? get email => _email;
+  String? get token => _token;
+  bool get skippedSignIn => _skippedSignIn;
+
+  bool get isLoggedIn => _token != null && !_skippedSignIn;
+
+  void setUser(String email, String token) {
+    _email = email;
+    _token = token;
+    _skippedSignIn = false;
+    notifyListeners();
+  }
+
+  void setSkippedSignIn(bool skipped) {
+    _skippedSignIn = skipped;
+    notifyListeners();
+  }
+
+  void clearUser() {
+    _email = null;
+    _token = null;
+    _skippedSignIn = false;
+    notifyListeners();
+  }
+
+  void signOut() {
+    clearUser();
+  }
+}
 
 void main() {
-  runApp(const MaterialApp(
-    title: 'Exam Preparation App',
-    home: ExamSelectionPage(),
-  ));
+  runApp(
+    ChangeNotifierProvider(
+      create: (context) => UserProvider(),
+      child: MyApp(),
+    ),
+  );
+}
+
+class MyApp extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Exam Preparation App',
+      home: Consumer<UserProvider>(
+        builder: (context, userProvider, child) {
+          if (userProvider.isLoggedIn || userProvider.skippedSignIn) {
+            return ExamSelectionPage();
+          } else {
+            return SignInPage();
+          }
+        },
+      ),
+    );
+  }
+}
+
+class SignInPage extends StatefulWidget {
+  const SignInPage({Key? key}) : super(key: key);
+
+  @override
+  _SignInPageState createState() => _SignInPageState();
+}
+
+class _SignInPageState extends State<SignInPage> {
+  final _formKey = GlobalKey<FormState>();
+  String _email = '';
+  String _password = '';
+  bool _isLoading = false;
+
+  void _skipSignIn() {
+    Provider.of<UserProvider>(context, listen: false).setSkippedSignIn(true);
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(builder: (context) => ExamSelectionPage()),
+    );
+  }
+
+  Future<void> _signIn() async {
+    if (_formKey.currentState!.validate()) {
+      _formKey.currentState!.save();
+      setState(() {
+        _isLoading = true;
+      });
+
+      try {
+        final authData = await pb.collection('users').authWithPassword(
+              _email,
+              _password,
+            );
+
+        Provider.of<UserProvider>(context, listen: false)
+            .setUser(_email, authData.token);
+
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (context) => ExamSelectionPage()),
+        );
+      } catch (e) {
+        print(e.toString());
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Sign in failed: ${e.toString()}')),
+        );
+      } finally {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Sign In'),
+        actions: [
+          TextButton(
+            onPressed: _skipSignIn,
+            child: const Text('Skip', style: TextStyle(color: Colors.black)),
+          ),
+        ],
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              TextFormField(
+                decoration: const InputDecoration(labelText: 'Email'),
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please enter your email';
+                  }
+                  return null;
+                },
+                onSaved: (value) {
+                  _email = value!;
+                },
+              ),
+              TextFormField(
+                decoration: const InputDecoration(labelText: 'Password'),
+                obscureText: true,
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please enter your password';
+                  }
+                  return null;
+                },
+                onSaved: (value) {
+                  _password = value!;
+                },
+              ),
+              const SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: _isLoading ? null : _signIn,
+                child: _isLoading
+                    ? CircularProgressIndicator()
+                    : const Text('Sign In'),
+              ),
+              TextButton(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const SignUpPage()),
+                  );
+                },
+                child: const Text('Don\'t have an account? Sign Up'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class SignUpPage extends StatefulWidget {
+  const SignUpPage({Key? key}) : super(key: key);
+
+  @override
+  _SignUpPageState createState() => _SignUpPageState();
+}
+
+class _SignUpPageState extends State<SignUpPage> {
+  final _formKey = GlobalKey<FormState>();
+  String _email = '';
+  String _password = '';
+  String _confirmPassword = '';
+  bool _isLoading = false;
+
+  TextEditingController _passwordController = TextEditingController();
+  TextEditingController _confirmPasswordController = TextEditingController();
+
+  Future<void> _signUp() async {
+    if (_formKey.currentState!.validate()) {
+      _formKey.currentState!.save();
+      setState(() {
+        _isLoading = true;
+      });
+
+      try {
+        final user = await pb.collection('users').create(body: {
+          'email': _email,
+          'password': _passwordController.text,
+          'passwordConfirm': _confirmPasswordController.text,
+        });
+
+        // Sign in the user after successful sign up
+        final authData = await pb.collection('users').authWithPassword(
+              _email,
+              _passwordController.text, // Use the password from the controller
+            );
+
+        Provider.of<UserProvider>(context, listen: false)
+            .setUser(_email, authData.token);
+
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (context) => ExamSelectionPage()),
+        );
+      } catch (e) {
+        print(e.toString());
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Sign up failed: ${e.toString()}')),
+        );
+      } finally {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Sign Up'),
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              TextFormField(
+                decoration: const InputDecoration(labelText: 'Email'),
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please enter your email';
+                  }
+                  return null;
+                },
+                onSaved: (value) {
+                  _email = value!;
+                },
+              ),
+              TextFormField(
+                controller: _passwordController,
+                decoration: const InputDecoration(labelText: 'Password'),
+                obscureText: true,
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please enter your password';
+                  }
+                  return null;
+                },
+              ),
+              TextFormField(
+                controller: _confirmPasswordController,
+                decoration:
+                    const InputDecoration(labelText: 'Confirm Password'),
+                obscureText: true,
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please confirm your password';
+                  }
+                  if (value != _passwordController.text) {
+                    return 'Passwords do not match';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: _isLoading ? null : _signUp,
+                child: _isLoading
+                    ? CircularProgressIndicator()
+                    : const Text('Sign Up'),
+              ),
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                },
+                child: const Text('Already have an account? Sign In'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class ExamSelectionPage extends StatelessWidget {
@@ -84,6 +393,45 @@ class BottomNavWrapper extends StatefulWidget {
   _BottomNavWrapperState createState() => _BottomNavWrapperState();
 }
 
+class ProfilePage extends StatelessWidget {
+  const ProfilePage({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    final userProvider = Provider.of<UserProvider>(context);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Profile'),
+      ),
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              userProvider.email ?? 'No email',
+              style: TextStyle(fontSize: 16),
+            ),
+            SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: () {
+                if (userProvider.isLoggedIn) {
+                  userProvider.signOut();
+                }
+                Navigator.of(context).pushAndRemoveUntil(
+                  MaterialPageRoute(builder: (context) => SignInPage()),
+                  (Route<dynamic> route) => false,
+                );
+              },
+              child: Text(userProvider.isLoggedIn ? 'Sign Out' : 'Sign In'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _BottomNavWrapperState extends State<BottomNavWrapper> {
   int currentPageIndex = 0;
 
@@ -94,7 +442,7 @@ class _BottomNavWrapperState extends State<BottomNavWrapper> {
         index: currentPageIndex,
         children: [
           widget.child,
-          const Center(child: Text('Profile', style: TextStyle(fontSize: 24))),
+          const ProfilePage(),
         ],
       ),
       bottomNavigationBar: NavigationBar(
@@ -109,11 +457,11 @@ class _BottomNavWrapperState extends State<BottomNavWrapper> {
           NavigationDestination(
             selectedIcon: Icon(Icons.home),
             icon: Icon(Icons.home_outlined),
-            label: '',
+            label: 'Home',
           ),
           NavigationDestination(
             icon: Icon(Icons.person),
-            label: '',
+            label: 'Profile',
           ),
         ],
       ),
@@ -308,20 +656,6 @@ class _QuizPageState extends State<QuizPage> {
   Set<int> selectedIndices = {};
   bool answeredCorrectly = false;
 
-  void _reportQuestion() {
-    // Implement report functionality here
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Question reported')),
-    );
-  }
-
-  void _saveQuestion() {
-    // Implement save functionality here
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Soru Kaydedildi')),
-    );
-  }
-
   @override
   void initState() {
     super.initState();
@@ -420,18 +754,6 @@ class _QuizPageState extends State<QuizPage> {
       child: Scaffold(
         appBar: AppBar(
           title: Text('${widget.testName} Quiz ${widget.quizNumber}'),
-          actions: [
-            IconButton(
-              icon: Icon(Icons.flag, color: Colors.purple), // Changed c
-              onPressed: _reportQuestion,
-              tooltip: 'Report Question',
-            ),
-            IconButton(
-              icon: Icon(Icons.bookmark, color: Colors.purple),
-              onPressed: _saveQuestion,
-              tooltip: 'Save Question',
-            ),
-          ],
         ),
         body: Padding(
           padding: const EdgeInsets.all(16.0),

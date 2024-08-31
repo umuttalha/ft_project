@@ -1,0 +1,7 @@
+ft_backend/pb_data/
+
+# Other files and directories to ignore
+*.log
+*.tmp
+node_modules/
+build/
